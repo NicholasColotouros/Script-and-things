@@ -6,9 +6,10 @@
 import argparse
 import csv
 import datetime
+from boardgamegeek.exceptions import BGGItemNotFoundError
 from boardgamegeek import BGGClient
 
-# argument parsing and variable setup
+# argument parsing and validation
 parser = argparse.ArgumentParser(description='Search parameters for Board Game Geek.')
 parser.add_argument('-u', '--username', required=True, type=str, dest='user_name',
                     help='The BGG user name to use when querying collections and plays.')
@@ -18,6 +19,10 @@ parser.add_argument('-e', '--enddate', required=True, type=datetime.date.fromiso
                     help='The end date for searching BGG records (inclusively) in format YYYY-MM-DD.')
 
 args = parser.parse_args()
+if args.end_date <= args.start_date:
+    raise argparse.ArgumentTypeError('The start date argument must be BEFORE the end date argument.')
+
+# Globals
 user_name = args.user_name
 start_date = args.start_date
 end_date = args.end_date
@@ -67,24 +72,28 @@ collection_in_search = {}
 
 # Start by grabbing the sessions. By putting it in the dict from now, we can fill in the total number of plays from the collection later
 # instead of fully filling it out and pruning the dictionary.
-for play in bgg.plays(name=user_name, min_date=start_date, max_date=end_date):
-    if play.game_id in collection_in_search:
-        game_info = collection_in_search[play.game_id]
-        game_info.num_plays_in_search = play.quantity + game_info.num_plays_in_search
-    else:
-        collection_in_search[play.game_id] = GameInfo(play.game_name, num_plays_in_search = play.quantity)
+try:
+    for play in bgg.plays(name=user_name, min_date=start_date, max_date=end_date):
+        if play.game_id in collection_in_search:
+            game_info = collection_in_search[play.game_id]
+            game_info.num_plays_in_search = play.quantity + game_info.num_plays_in_search
+        else:
+            collection_in_search[play.game_id] = GameInfo(play.game_name, num_plays_in_search = play.quantity)
 
-collection_items = bgg.collection(user_name=user_name, rated=True).items
-for item in collection_items:
-    last_modified = datetime.datetime.strptime(item.last_modified, '%Y-%m-%d %H:%M:%S').date()
+    collection_items = bgg.collection(user_name=user_name, rated=True).items
+    for item in collection_items:
+        last_modified = datetime.datetime.strptime(item.last_modified, '%Y-%m-%d %H:%M:%S').date()
 
-    # We played it within the specified time frame if it's already in the set
-    if item.id in collection_in_search:
-        game_info = collection_in_search[item.id]
-        game_info.num_plays = item.numplays
-        game_info.rating = item.rating
-    elif start_date <= last_modified <= end_date:
-        collection_in_search[item.id] = GameInfo(item.name, rating = item.rating, num_plays = item.numplays, num_plays_in_search = 0)
+        # We played it within the specified time frame if it's already in the set
+        if item.id in collection_in_search:
+            game_info = collection_in_search[item.id]
+            game_info.num_plays = item.numplays
+            game_info.rating = item.rating
+        elif start_date <= last_modified <= end_date:
+            collection_in_search[item.id] = GameInfo(item.name, rating = item.rating, num_plays = item.numplays, num_plays_in_search = 0)
+except BGGItemNotFoundError:
+    print("Username (%s) was not found in board game geek. Check that you did not make any typos or try again later." % user_name)
+    exit()
 
 # Now that we have all of our information, write it to a csv
 with open(output_file_name, 'w', newline='') as file:
